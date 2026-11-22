@@ -1,0 +1,15 @@
+{
+  "name": "ESP32-BLE-Keyboard",
+  "version": "0.3.2",
+  "description": "Bluetooth LE HID keyboard for ESP32. Vendored from T-vK/ESP32-BLE-Keyboard with TV pairing and F13 descriptor fixes.",
+  "keywords": "ble,hid,keyboard,esp32",
+  "authors": [
+    {
+      "name": "T-vK",
+      "url": "https://github.com/T-vK/ESP32-BLE-Keyboard"
+    }
+  ],
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "homepage": "https://github.com/T-vK/ESP32-BLE-Keyboard"
+}
