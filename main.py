@@ -1,10 +1,12 @@
 # TVAutoPilot
 #
 # An ESP32 that stays paired as a BLE HID keyboard and, on a timer, sends
-# one key so Netflix does not stop on "Are you still watching?".
+# a key so Netflix does not stop on "Are you still watching?".
 #
-# Confirm mode (default): Enter / OK. This dismisses the prompt. On some
-# TVs it also pauses playback, so it has to be tried with a long BOOT
+# Confirm mode (default): Enter / OK, always as a pair two seconds apart.
+# On some TVs the first press pauses playback and the second resumes it.
+# The board cannot see whether the set is playing, paused, or showing the
+# prompt, so this mode never sends a lone OK. Try it with a long BOOT
 # press before it is left running.
 #
 # Safe mode: the single key in config.py, default F13. Netflix does not
@@ -40,7 +42,10 @@ class App:
         self.press_started_ms = 0
         self.next_key_at_ms = time.ticks_ms()
         self.flash_until_ms = 0
-        self._first_ok_pending = not config.IMMEDIATE_TEST
+        # owe: the first OK of a pair was released, the second was not.
+        # held: the press report went out and the key is still down.
+        self._owe_second_ok = False
+        self._ok_held = False
         self._write_led(False)
 
     def run(self):
@@ -115,15 +120,31 @@ class App:
             on = not on
         self._write_led(on)
 
-    def _tap_once(self):
+    def _confirm_pair(self):
+        return self.mode == _MODE_CONFIRM and not config.IMMEDIATE_TEST
+
+    # 1 = press and release both queued. 0 = press did not go out.
+    # -1 = the key is still down, so another press would not be a new OK.
+    def _tap_result(self):
         if not self.keyboard.connected:
             print("Nie wysłano: telewizor nie jest połączony.")
-            return False
-        if not self.keyboard.tap(self._active_key(), config.KEY_HOLD_MS):
+            return 0
+        result = self.keyboard.tap(self._active_key(), config.KEY_HOLD_MS)
+        if result == 0:
             print("Nie wysłano: telewizor odrzucił raport.")
-            return False
+            return 0
         self.flash_until_ms = time.ticks_add(time.ticks_ms(), 160)
-        return True
+        if result < 0 and not self.keyboard.release_all():
+            print("Naciśnięcie wyszło, puszczenie klawisza nie.")
+            return -1
+        return 1
+
+    def _tap_once(self):
+        result = self._tap_result()
+        if result < 0:
+            self._ok_held = True
+            return False
+        return result == 1
 
     def _note_sent(self, what):
         self.next_key_at_ms = time.ticks_add(time.ticks_ms(), self._interval_ms())
@@ -135,32 +156,81 @@ class App:
     def _backoff(self):
         self.next_key_at_ms = time.ticks_add(time.ticks_ms(), 5000)
 
-    # Test mode stays a single key on the short interval.
-    # Daily confirm mode: the first press after a connection is one OK.
-    # Every later keep-alive is two OK presses, so a set that pauses on
-    # Enter still gets a second press.
+    # Test mode and safe mode stay a single key.
+    # Confirm mode always sends two OK presses. The board cannot see
+    # whether the TV accepted Enter, so a lone OK is never the plan:
+    # one press can pause playback, and the next pair would leave it paused.
     def _send_scheduled(self):
-        single = (
-            config.IMMEDIATE_TEST
-            or self._first_ok_pending
-            or self.mode != _MODE_CONFIRM
-        )
+        if self._ok_held:
+            if not self.keyboard.release_all():
+                self._backoff()
+                return
+            self._ok_held = False
+            if self._confirm_pair():
+                if self._owe_second_ok:
+                    self._owe_second_ok = False
+                    self._note_sent("dwa OK")
+                    return
+                self._owe_second_ok = True
+        if self._confirm_pair():
+            if self._owe_second_ok:
+                self._send_owed_second()
+                return
+            self._start_pair()
+            return
         if not self._tap_once():
             self._backoff()
             return
-        if single:
-            if self._first_ok_pending and not config.IMMEDIATE_TEST:
-                self._first_ok_pending = False
-                what = "jedno OK" if self.mode == _MODE_CONFIRM else "klawisz"
-                self._note_sent(what)
-            else:
-                self._note_sent("klawisz")
+        self._note_sent("klawisz")
+
+    def _start_pair(self):
+        first = self._tap_result()
+        if first < 0:
+            self._ok_held = True
+            self._backoff()
+            print("OK wciśnięte, bez puszczenia. Puszczam za 5 s.")
             return
+        if first == 0:
+            self._backoff()
+            return
+        if self._second_ok():
+            self._note_sent("dwa OK")
+            return
+        self._owe_second_ok = True
+        self._backoff()
+        if self._ok_held:
+            print("Drugie OK wciśnięte, bez puszczenia. Puszczam za 5 s.")
+        else:
+            print("Jedno OK wyszło, drugie nie. Powtórka drugiego za 5 s.")
+
+    def _second_ok(self):
+        gap_ms = config.DOUBLE_OK_GAP_SECONDS * 1000
+        time.sleep_ms(gap_ms)
+        second = self._tap_result()
+        if second == 1:
+            return True
+        if second < 0:
+            self._ok_held = True
+            return False
+        time.sleep_ms(gap_ms)
+        second = self._tap_result()
+        if second == 1:
+            return True
+        if second < 0:
+            self._ok_held = True
+        return False
+
+    def _send_owed_second(self):
         time.sleep_ms(config.DOUBLE_OK_GAP_SECONDS * 1000)
-        if not self._tap_once():
-            self._note_sent("jedno OK, drugie nie wyszło")
+        result = self._tap_result()
+        if result == 1:
+            self._owe_second_ok = False
+            self._note_sent("drugie OK")
             return
-        self._note_sent("dwa OK")
+        if result < 0:
+            self._ok_held = True
+        self._backoff()
+        print("Drugie OK nie wyszło. Powtórka za 5 s.")
 
     def _toggle_mode(self):
         self.mode = _MODE_CONFIRM if self.mode == _MODE_SAFE else _MODE_SAFE
@@ -189,37 +259,57 @@ class App:
             and time.ticks_diff(now, self.press_started_ms) >= config.LONG_PRESS_MS
         ):
             self.long_press_sent = True
-            print("Długie naciśnięcie BOOT: wysyłam jeden klawisz teraz.")
-            self._tap_once()
+            if self._confirm_pair():
+                if self._owe_second_ok and not self._ok_held:
+                    print("Długie naciśnięcie BOOT: wysyłam brakujące drugie OK.")
+                else:
+                    print("Długie naciśnięcie BOOT: wysyłam dwa OK teraz.")
+            else:
+                print("Długie naciśnięcie BOOT: wysyłam jeden klawisz teraz.")
+            self._send_scheduled()
 
     def _service_schedule(self, now):
         connected = self.keyboard.connected
         if connected != self.was_connected:
             self.was_connected = connected
             if connected:
-                self.keyboard.release_all()
+                held = self._ok_held
+                if held and self.keyboard.release_all():
+                    self._ok_held = False
+                    if self._confirm_pair():
+                        # Releasing the stuck key finishes that OK.
+                        # It was the second of a pair, or the first.
+                        self._owe_second_ok = not self._owe_second_ok
+                elif not held:
+                    self.keyboard.release_all()
                 try:
                     self.keyboard.pair()
                 except OSError as exc:
                     print("Parowanie nie wystartowało: %s" % exc)
-                self._first_ok_pending = not config.IMMEDIATE_TEST
-                wait_ms = self._first_key_delay_ms()
-                self.next_key_at_ms = time.ticks_add(now, wait_ms)
-                if config.IMMEDIATE_TEST:
-                    print(
-                        "Połączono. Pierwszy klawisz za %d s (tryb test, %s)."
-                        % (wait_ms // 1000, self.mode)
-                    )
-                elif self.mode == _MODE_CONFIRM:
-                    print(
-                        "Połączono. Jedno OK za %d s, potem dwa OK co %d min."
-                        % (wait_ms // 1000, config.KEEPALIVE_INTERVAL_MINUTES)
-                    )
+                if self._confirm_pair() and (self._owe_second_ok or self._ok_held):
+                    self.next_key_at_ms = time.ticks_add(now, 5000)
+                    if self._ok_held:
+                        print("Połączono. Klawisz jeszcze wciśnięty, puszczam za 5 s.")
+                    else:
+                        print("Połączono. Brakuje drugiego OK, powtórka za 5 s.")
                 else:
-                    print(
-                        "Połączono. Pierwszy klawisz za %d s (tryb cichy)."
-                        % (wait_ms // 1000,)
-                    )
+                    wait_ms = self._first_key_delay_ms()
+                    self.next_key_at_ms = time.ticks_add(now, wait_ms)
+                    if config.IMMEDIATE_TEST:
+                        print(
+                            "Połączono. Pierwszy klawisz za %d s (tryb test, %s)."
+                            % (wait_ms // 1000, self.mode)
+                        )
+                    elif self.mode == _MODE_CONFIRM:
+                        print(
+                            "Połączono. Dwa OK za %d s, potem dwa OK co %d min."
+                            % (wait_ms // 1000, config.KEEPALIVE_INTERVAL_MINUTES)
+                        )
+                    else:
+                        print(
+                            "Połączono. Pierwszy klawisz za %d s (tryb cichy)."
+                            % (wait_ms // 1000,)
+                        )
             else:
                 print("Rozłączono. Szukam telewizora.")
         if connected and time.ticks_diff(now, self.next_key_at_ms) >= 0:

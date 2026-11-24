@@ -233,26 +233,32 @@ class BleKeyboard:
         self._ble.gap_pair(self.conn_handle)
 
     def tap(self, usage, hold_ms):
+        # 1 = press and release queued. 0 = press did not go out.
+        # -1 = press queued, release did not. A held key makes the next
+        # press the same report, so the TV never sees a second OK.
         if not self.connected or self.conn_handle is None:
-            return False
+            return 0
         try:
             self._notify(key_report(usage))
         except OSError:
-            return False
+            return 0
         time.sleep_ms(hold_ms)
-        try:
-            self._notify(key_report(0))
-        except OSError:
-            pass
-        return True
+        for _attempt in range(3):
+            try:
+                self._notify(key_report(0))
+                return 1
+            except OSError:
+                time.sleep_ms(40)
+        return -1
 
     def release_all(self):
         if not self.connected or self.conn_handle is None:
-            return
+            return False
         try:
             self._notify(key_report(0))
         except OSError:
-            pass
+            return False
+        return True
 
     def _notify(self, report):
         self._ble.gatts_notify(self.conn_handle, self._h_input, report)

@@ -8,7 +8,7 @@ Poprzedni firmware na Arduino jest w katalogu `arduino/`. Zostaje, bo część t
 
 ## Co wysyła
 
-Po włączeniu startuje **tryb potwierdzenia**. Gdy telewizor się połączy, po 60 sekundach idzie **jedno OK**, żeby opiekun zobaczył, że pilot działa, i mógł wcisnąć play. Potem co 20 minut idą **dwa OK** z przerwą 2 sekund. To Enter, czyli na pilocie OK / wybór. Pierwsze z pary może spauzować film, drugie jest szansą, żeby odtwarzanie zostało włączone. Ta plansza Netflixa zamyka się właśnie tym klawiszem.
+Po włączeniu startuje **tryb potwierdzenia**. Gdy telewizor się połączy, po 60 sekundach idą **dwa OK** z przerwą 2 sekund, i tak samo co 20 minut. To Enter, czyli na pilocie OK / wybór. Pierwsze z pary może spauzować film, drugie wraca do odtwarzania. Pojedyncze OK nie jest wysyłane: płytka nie widzi, czy telewizor gra, stoi na pauzie, czy pokazuje planszę, więc nie da się dobrać jednego naciśnięcia do stanu ekranu. Ta plansza Netflixa zamyka się właśnie tym klawiszem.
 
 **Tryb cichy** wysyła zamiast tego jeden klawisz **F13**. Netflix nie przypisuje F13 do przewijania, pauzy, głośności ani do przesuwania zaznaczenia. Lewo i prawo przewijają film, więc tych klawiszy tu nie ma. Głośność też.
 
@@ -16,7 +16,7 @@ F13 jest prawdziwym klawiszem klawiatury (kod HID `0x68`). Mapa raportu w `ble_k
 
 ### Ryzyko, którego nie da się usunąć w programie
 
-- Na części Samsungów i LG **Enter w trakcie odtwarzania pauzuje Netflix** albo otwiera pasek. Zanim zostawisz tryb potwierdzenia bez opieki, sprawdź go długim naciśnięciem BOOT w trakcie odcinka.
+- Na części Samsungów i LG **Enter w trakcie odtwarzania pauzuje Netflix** albo otwiera pasek. Drugie OK ma puścić film dalej. Zanim zostawisz tryb potwierdzenia bez opieki, sprawdź go długim naciśnięciem BOOT w trakcie odcinka.
 - Na części telewizorów Netflix zeruje swój licznik tylko wtedy, gdy aplikacja sama obsłuży klawisz. Zignorowane F13 może **nie** powstrzymać planszy. F13 też jej nie zamknie, gdy już wisi na ekranie. Do zamknięcia służy Enter.
 - Enter na ekranie głównym telewizora potwierdzi to, co jest akurat podświetlone. Zostaw włączony odcinek, nie menu.
 - Starsze telewizory przyjmują tylko klawiaturę Bluetooth Classic. ESP32 w tym projekcie mówi wyłącznie Bluetooth Low Energy. Taki telewizor nie pokaże TVAutoPilot na liście.
@@ -26,7 +26,7 @@ Inny „cichy” klawisz (F14, F15, Scroll Lock) ustawia się w `config.py`. Scr
 
 ## Dioda i przycisk BOOT
 
-Przycisk to **BOOT** (na płytce bywa opisany IO0), nie EN. EN tylko resetuje płytkę. Krótkie naciśnięcie BOOT zmienia tryb do następnego restartu. Przytrzymanie około 3 sekund wysyła aktualny klawisz od razu — do parowania i do sprawdzenia, czy Enter nie pauzuje filmu. Tryb po zaniku prądu wraca do wartości z `config.py` (domyślnie potwierdzenie).
+Przycisk to **BOOT** (na płytce bywa opisany IO0), nie EN. EN tylko resetuje płytkę. Krótkie naciśnięcie BOOT zmienia tryb do następnego restartu. Przytrzymanie około 3 sekund w trybie potwierdzenia wysyła od razu dwa OK — do parowania i do sprawdzenia, czy film wraca po pauzie. W trybie cichym wysyła jeden klawisz F13. Tryb po zaniku prądu wraca do wartości z `config.py` (domyślnie potwierdzenie).
 
 | Stan | Tryb potwierdzenia (Enter) | Tryb cichy (F13) |
 | --- | --- | --- |
@@ -116,16 +116,16 @@ Plik `config.py`. Wartości klawiszy to kody HID, nie stare numery z Arduino (`K
 
 ```python
 KEEPALIVE_INTERVAL_MINUTES = 20   # co ile minut wysyłać dwa OK
-FIRST_OK_DELAY_SECONDS = 60       # jedno OK tyle sekund po połączeniu
+FIRST_OK_DELAY_SECONDS = 60       # dwa OK tyle sekund po połączeniu
 DOUBLE_OK_GAP_SECONDS = 2         # przerwa między dwoma OK
 IMMEDIATE_TEST = False            # True = pojedyncze OK co kilka sekund, bez pary
-CONFIRM_MODE_KEY = KEY_RETURN     # tryb potwierdzenia, domyślnie Enter
+CONFIRM_MODE_KEY = KEY_RETURN     # albo KEY_DOWN_ARROW (strzałka w dół)
 SAFE_MODE_KEY = KEY_F13           # tryb cichy
 BOOT_INTO_SAFE_MODE = False       # True = po restarcie od razu tryb cichy
 ```
 
 `IMMEDIATE_TEST` ustaw na `True` tylko na czas próby przy biurku. Wtedy zostają pojedyncze OK: pierwszy po `IMMEDIATE_TEST_DELAY_SECONDS` (domyślnie 5 s), kolejne co `IMMEDIATE_TEST_INTERVAL_SECONDS` (domyślnie 30 s). Na co dzień zostaw `False`. `FIRST_OK_DELAY_SECONDS` przy `IMMEDIATE_TEST = True` jest pomijany.
 
-Klawisze, których program nie przyjmie w żadnym z tych dwóch pól, bo na Netflixie przewijają albo ruszają zaznaczenie: `KEY_LEFT_ARROW`, `KEY_RIGHT_ARROW`, `KEY_UP_ARROW`, `KEY_DOWN_ARROW`. Klawisze głośności i play/pause są poza mapą raportu i też zostaną odrzucone przy starcie. To celowe.
+W trybie potwierdzenia zamiast Entera można ustawić `KEY_DOWN_ARROW`. Dwa naciśnięcia schodzą wtedy w dół po zaznaczeniu, a nie wysyłają OK. `KEY_LEFT_ARROW`, `KEY_RIGHT_ARROW` i `KEY_UP_ARROW` program odrzuci: lewo i prawo przewijają film, góra rusza zaznaczenie w drugą stronę. W trybie cichym strzałka w dół też jest odrzucona. Klawisze głośności i play/pause są poza mapą raportu i też zostaną odrzucone przy starcie. To celowe.
 
-Gdy Enter pauzuje film, a F13 nie zatrzymuje planszy, zostaw tryb potwierdzenia na czas oglądania i pogódź się z pauzą albo spróbuj w trybie cichym `KEY_F14` albo `KEY_SCROLL_LOCK`. Każdą zmianę sprawdź długim naciśnięciem w trakcie odcinka, zanim zostawisz płytkę samą.
+Gdy para OK zostawia film zapauzowany, spróbuj w trybie cichym `KEY_F14` albo `KEY_SCROLL_LOCK`. Każdą zmianę sprawdź długim naciśnięciem w trakcie odcinka, zanim zostawisz płytkę samą.

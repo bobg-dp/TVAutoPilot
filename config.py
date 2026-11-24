@@ -4,14 +4,15 @@
 # the library subtracted 136 before putting them in the report.
 
 # How often to send the keep-alive while the TV stays connected.
-# In daily use each of these is two OK presses. Ignored for the spacing
-# of the test mode below.
-KEEPALIVE_INTERVAL_MINUTES = 20
+# In daily confirm mode each of these is two OK presses. Ignored for the
+# spacing of the test mode below.
+KEEPALIVE_INTERVAL_MINUTES = 30
 
-# Daily use, after the TV connects: one OK, so a caregiver can see that
-# the remote works and press play. Later keep-alives are two OK presses.
+# Daily use, after the TV connects: wait this long, then two OK presses.
+# The same pair repeats every KEEPALIVE_INTERVAL_MINUTES. A single OK is
+# not used, because the board cannot see if the TV accepted the key.
 # Ignored when IMMEDIATE_TEST is true.
-FIRST_OK_DELAY_SECONDS = 60
+FIRST_OK_DELAY_SECONDS = 30
 
 # Gap between the two OK presses of a keep-alive. The first can pause
 # playback on some sets; the second is the chance to leave it playing.
@@ -31,8 +32,17 @@ IMMEDIATE_TEST_INTERVAL_SECONDS = 30
 # "Are you still watching?" / "Czy nadal oglądasz?". On some Samsung and
 # LG sets the same key pauses playback. Test with a 3 second BOOT press
 # during an episode before leaving this mode unattended.
+#
+# Set CONFIRM_MODE_KEY to KEY_DOWN_ARROW to send Down instead of OK.
+# Two presses then move the highlight down. Left and right seek, and
+# up moves focus the other way, so those three stay rejected.
 KEY_RETURN = 0x28
-CONFIRM_MODE_KEY = KEY_RETURN
+KEY_DOWN_ARROW = 0x51
+KEY_LEFT_ARROW = 0x50
+KEY_RIGHT_ARROW = 0x4F
+KEY_UP_ARROW = 0x52
+#CONFIRM_MODE_KEY = KEY_RETURN
+CONFIRM_MODE_KEY = KEY_DOWN_ARROW
 
 # Safe mode. One key that is a real HID report but is not bound by Netflix
 # to seek, pause, volume, or focus.
@@ -60,11 +70,6 @@ KEY_F24 = 0x73
 KEY_SCROLL_LOCK = 0x47
 SAFE_MODE_KEY = KEY_F13
 
-KEY_LEFT_ARROW = 0x50
-KEY_RIGHT_ARROW = 0x4F
-KEY_UP_ARROW = 0x52
-KEY_DOWN_ARROW = 0x51
-
 # False = boot into confirm mode (Enter). True = boot into safe mode (F13).
 # The BOOT button toggles the mode until the next reset or power loss.
 # The choice is not stored in flash: after a reboot the device returns to
@@ -90,12 +95,13 @@ KEY_HOLD_MS = 80
 # Shown in the TV's Bluetooth list. 15 characters maximum.
 DEVICE_NAME = "TVAutoPilot"
 
-_ARROW_KEYS = {
+_CONFIRM_REJECTED = {
     KEY_LEFT_ARROW: "Left arrow seeks on Netflix",
     KEY_RIGHT_ARROW: "Right arrow seeks on Netflix",
     KEY_UP_ARROW: "Up arrow moves focus on Netflix",
-    KEY_DOWN_ARROW: "Down arrow moves focus on Netflix",
 }
+_SAFE_REJECTED = dict(_CONFIRM_REJECTED)
+_SAFE_REJECTED[KEY_DOWN_ARROW] = "Down arrow moves focus on Netflix"
 
 
 def _check_range(name, value, low, high):
@@ -110,9 +116,9 @@ def _check_bool(name, value):
     raise ValueError("%s must be True or False" % name)
 
 
-def _check_key(name, value):
+def _check_key(name, value, rejected):
     _check_range(name, value, 1, KEY_F24)
-    reason = _ARROW_KEYS.get(value)
+    reason = rejected.get(value)
     if reason:
         raise ValueError("%s: %s" % (name, reason))
 
@@ -131,8 +137,8 @@ def validate():
     _check_bool("LED_ACTIVE_HIGH", LED_ACTIVE_HIGH)
     _check_bool("BOOT_INTO_SAFE_MODE", BOOT_INTO_SAFE_MODE)
     _check_bool("IMMEDIATE_TEST", IMMEDIATE_TEST)
-    _check_key("CONFIRM_MODE_KEY", CONFIRM_MODE_KEY)
-    _check_key("SAFE_MODE_KEY", SAFE_MODE_KEY)
+    _check_key("CONFIRM_MODE_KEY", CONFIRM_MODE_KEY, _CONFIRM_REJECTED)
+    _check_key("SAFE_MODE_KEY", SAFE_MODE_KEY, _SAFE_REJECTED)
     if not isinstance(DEVICE_NAME, str) or not 1 <= len(DEVICE_NAME.encode("utf-8")) <= 15:
         raise ValueError("DEVICE_NAME must be 1 to 15 bytes")
 
